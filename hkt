@@ -1,0 +1,1255 @@
+#! /bin/bash
+
+# FONT STYLES
+KFDEF='\e[0m'
+KFBOLD='\e[1m'
+
+rkt-list(){
+    state=''
+    output=''
+
+    while test $# -gt 0; do
+        case "$1" in 
+            -h|--help)
+                echo -e "\nhkt list options:"
+                echo -e "\t-h|--help"
+                echo -e "\t-s|--state\trunning | exited | garbage"
+                echo -e ""
+                exit 0
+                ;;
+            -s|--state)
+                shift
+                
+                state=$1
+                
+                shift
+                ;;
+            running|exited|garbage)
+                state=$1
+
+                break
+                ;;
+            *)
+                echo -e "\n\t Unknown command: $1\n"
+                exit 0
+                ;;
+        esac
+    done
+
+    # IF state IS NOT GIVEN
+    if [ -z "$state" ]; then 
+        output=$(sudo rkt list | sed -n '1!p')
+    else
+        # IF state IS garbage THEN HIGHLIGH exited garbage
+        if [ "$state" == "garbage" ]; then
+            state="exited garbage"
+        fi
+
+        # GET LIST
+        output=$(sudo rkt list | sed -n '1!p' | grep --color=always "$state")
+
+        # IF STATE IS exited THEN EXCLUDE garbage
+        if [ "$state" == 'exited' ]; then
+            output=$(echo "$output" | grep -v "garbage" )
+        fi
+    fi
+
+    if [ "$output" ]; then 
+        # ADD LINE NUMBERS
+        output=$(echo "$output" | grep --color=always '' -n)
+        # OUTPUT WITH HEADERS
+        echo -e "\n${KFBOLD}$(sudo rkt list | head -n 1)${KFDEF}\n${output}\n" 
+    else 
+        echo ""
+        echo -e "\tResult returned empty."
+        echo ""
+    fi 
+
+    exit 0
+}
+
+rkt-image(){
+    command=''
+
+    while test $# -gt 0; do
+        case "$1" in 
+            -h|--help)
+                echo -e "\nhkt image options:"
+                echo -e "\t-h|--help"
+                echo -e "\tlist"
+                echo -e "\trm"
+                echo -e "\tmanifest | manifest [image number]"
+                echo -e ""
+                exit 0
+                ;;
+            list)
+                command=$1
+
+                shift
+                break
+                ;;
+            manifest)
+                command=$1
+
+                shift
+                break
+                ;;
+            rm)
+                command=$1
+                shift
+                break
+                ;;
+            *)
+                echo -e "\n\t Unknown command: $1\n"
+                exit 0
+                ;;
+        esac
+    done
+
+    if [ -z "$command" ]; then 
+        rkt-image --help
+    else
+        if [ "$command" == 'list' ]; then
+            # GET IMAGE LIST
+            output=$(sudo rkt image list | sed -n '1!p')
+            # ADD LINE NUMBERS
+            output=$(echo "$output" | grep --color=always '' -n)
+            # OUTPUT WITH HEADERS
+            echo -e "\n${KFBOLD}$(sudo rkt image list | head -n 1)${KFDEF}\n${output}\n" 
+        elif [ "$command" == 'manifest' ]; then
+            image_number=$1
+            
+            # IF NO IMAGE NUMBER
+            if [ -z "$image_number" ]; then
+                rkt-image list
+                read -p "Please select image number to cat-manifest: " image_number
+            fi
+
+            image_number=$(($image_number+1))
+            selected_image=$(sudo rkt image list | sed "${image_number}q;d" | cut -c 1-19)
+
+            if [ "$selected_image" != '' ]; then
+                sudo rkt image cat-manifest "$selected_image"
+            fi
+        elif [ "$command" == 'rm' ]; then
+            selected_image_number=0
+
+            hkt image list
+            read -p "Please select image number to remove: " selected_image_number
+
+            # CHECK FOR selected_image_number
+            if (( $selected_image_number > 0)); then 
+                # GET IMAGE ID
+
+                selected_line=$(sudo rkt image list | sed -n '1!p' | sed "${selected_image_number}q;d")
+                selected_image_id=$(echo "$selected_line" | awk -v N=1 '{print $N}')
+
+                # IF HAS ID
+                if [ $selected_image_id ]; then 
+                    continue_gc_image=''
+                    selected_image_name=$(echo "$selected_line" | awk -v N=2 '{print $N}')
+                    selected_image_size=$(echo "$selected_line" | awk -v N=3 '{print $N}')
+                    selected_image_time_a=$(echo "$selected_line" | awk -v N=4 '{print $N}')
+                    selected_image_time_b=$(echo "$selected_line" | awk -v N=5 '{print $N}')
+                    selected_image_time_c=$(echo "$selected_line" | awk -v N=6 '{print $N}')
+                    selected_image_time="$selected_image_time_a $selected_image_time_b $selected_image_time_c"
+
+                    echo -e ""
+                    echo -e "${KFBOLD}Image ID${KFDEF}:\t${selected_image_id}"
+                    echo -e "${KFBOLD}Image Name${KFDEF}:\t${selected_image_name}"
+                    echo -e "${KFBOLD}Image Size${KFDEF}:\t${selected_image_size}"
+                    echo -e "${KFBOLD}Import Time${KFDEF}:\t${selected_image_time}"
+                    
+                    echo ""
+                    read -p "Are you sure about that? y/n: " continue_gc_image
+
+                    if [ "$continue_gc_image" == "y" ]; then 
+                        echo ""
+                        echo -e "\tDeleting image ${KFBOLD}${selected_image_name}${KFDEF} 🧼  "
+                        echo -e "\tPlease wait..."
+                        echo ""
+
+                        # DELETE THE IMAGE
+                        sudo rkt image rm "$selected_image_id"
+
+                        hkt image list
+                        echo -e "\tDone! 🎉  Image deleted."
+                        echo ""
+                    else 
+                        echo ""
+                        echo -e "\tTransaction cancelled. Please come again. 👋"
+                        echo ""
+                    fi
+                else 
+                    echo -e "\n\tError! Invalid number.\n"
+                    exit 0
+                fi
+            else 
+                echo -e "\n\tError! Invalid number.\n"
+                exit 0
+            fi
+        fi
+    fi
+}
+
+rkt-stop(){
+    container_number=$1
+
+    while test $# -gt 0; do
+        case "$1" in 
+            -h|--help)
+                echo -e "\nhkt stop options:"
+                echo -e "\t-h|--help"
+                echo -e ""
+                exit 0
+                ;;
+            *)
+                echo -e "\n\t Unknown command: $1\n"
+                exit 0
+                ;;
+        esac
+    done
+
+    # IF NO CONTAINER NUMBER
+    if [ -z "$container_number" ]; then
+        selected_container_number=0
+
+        list_of_running=$(hkt list running)
+
+        if [[ $(echo "${list_of_running}" | tr -d '\n'  | tr -d '\t') == "Result returned empty." ]]; then 
+            echo ""
+            echo -e "\tStop! There are no running containers."
+            echo ""
+            exit 0
+        fi
+
+        echo -e "$list_of_running\n"
+        # ASK QUESTION
+        read -p "Please select container number to stop: " selected_container_number
+
+        # CHECK FOR selected_image_number 
+        if (( $selected_container_number > 0)); then 
+            selected_container_number=$((selected_container_number+1))
+            selected_line=$(echo "$list_of_running" | sed -n '1!p' | sed "${selected_container_number}q;d")
+            
+            if [ "$selected_line" ]; then 
+                continue_stop_container=''
+
+                selected_container_id=$(echo "$selected_line" | awk -v N=1 '{print $N}' | cut -d ":" -f 2 | sed "s,\x1B\[[0-9;]*[a-zA-Z],,g")
+                selected_container_name=$(echo "$selected_line" | awk -v N=2 '{print $N}')
+                selected_container_image_name=$(echo "$selected_line" | awk -v N=3 '{print $N}')
+                selected_container_state=$(echo "$selected_line" | awk -v N=4 '{print $N}')
+                selected_container_created_a=$(echo "$selected_line" | awk -v N=5 '{print $N}')
+                selected_container_created_b=$(echo "$selected_line" | awk -v N=6 '{print $N}')
+                selected_container_created_c=$(echo "$selected_line" | awk -v N=7 '{print $N}')
+                selected_container_created="$selected_container_created_a $selected_container_created_b $selected_container_created_c"
+                selected_network=$(echo "$selected_line" | awk -v N=11 '{print $N}')
+            
+                echo ""
+                echo -e "${KFBOLD}Container ID${KFDEF}:\t${selected_container_id}"
+                echo -e "${KFBOLD}Container Name${KFDEF}:\t${selected_container_name}"
+                echo -e "${KFBOLD}Image Name${KFDEF}:\t${selected_container_image_name}"
+                echo -e "${KFBOLD}State${KFDEF}:\t\t${selected_container_state}"
+                echo -e "${KFBOLD}Created${KFDEF}:\t${selected_container_created}"
+                echo -e "${KFBOLD}Network${KFDEF}:\t${selected_network}"
+                # echo -e "${KFBOLD}selected_line${KFDEF}:\t${selected_line}"
+                echo ""
+
+                read -p "Are you sure about that? y/n: " continue_stop_container
+
+                if [ "$continue_stop_container" == "y" ]; then
+                    echo ""
+                    echo -e "\tStopping container ${KFBOLD}${selected_container_name}${KFDEF} ☢️ "
+                    echo -e "\tPlease wait..."
+                    echo ""
+                    
+                    # STOP THE CONTAINER
+                    # echo "$selected_container_id"
+                    wtf=$selected_container_id
+                    sudo rkt stop $wtf
+                    sleep 0.5
+                    hkt list exited
+
+                    echo -e "\tDone! 🎉  Container has been stopped."
+                    echo ""
+                else 
+                    echo ""
+                    echo -e "\tTransaction cancelled. Please come again. 👋"
+                    echo ""
+                fi
+            else
+                echo -e "\n\tError! Invalid number.\n"
+            fi
+        else 
+            echo -e "\n\tError! Invalid number.\n"
+            exit 0
+        fi
+    fi
+
+    # 
+}
+
+rkt-gc(){
+    
+    echo ""
+    echo -e "\tGarbage collecting ♻️ "
+    echo -e "\tPlease wait..."
+    echo ""
+    sudo rkt gc --grace-period=0s
+    echo ""
+    echo -e "\tDone! 🎉  Garbage collection completed!"
+    echo ""
+}
+
+rkt-enter(){
+    container_name=''
+    bash_profile='/bin/bash'
+
+    while test $# -gt 0; do
+        case "$1" in 
+            -h|--help)
+                echo -e "\nhkt enter options:"
+                echo -e "\t-h|--help"
+                echo -e ""
+                exit 0
+                ;;
+            -p|--profile)
+                shift 
+                
+                bash_profile="$1"
+
+                shift 
+                ;;
+            *)
+                container_name=$1
+                shift
+                ;;
+        esac
+    done
+
+    # IF NO CONTAINER NUMBER
+    if [ -z "$container_name" ]; then
+        selected_container_number=0
+
+        list_of_running=$(hkt list running)
+
+        if [[ $(echo "${list_of_running}" | tr -d '\n'  | tr -d '\t') == "Result returned empty." ]]; then 
+            echo ""
+            echo -e "\tStop! There are no running containers."
+            echo ""
+            exit 0
+        fi
+
+        echo -e "$list_of_running\n"
+        # ASK QUESTION
+        read -p "Please select container number to enter: " selected_container_number
+
+        # CHECK FOR selected_image_number 
+        if (( $selected_container_number > 0)); then 
+            selected_container_number=$((selected_container_number+1))
+            selected_line=$(echo "$list_of_running" | sed -n '1!p' | sed "${selected_container_number}q;d")
+            
+            if [ "$selected_line" ]; then 
+                continue_stop_container=''
+
+                selected_container_id=$(echo "$selected_line" | awk -v N=1 '{print $N}' | cut -d ":" -f 2 | sed "s,\x1B\[[0-9;]*[a-zA-Z],,g")
+            else
+                echo -e "\n\tError! Invalid number.\n"
+            fi
+        else 
+            echo -e "\n\tError! Invalid number.\n"
+            exit 0
+        fi
+    else 
+        selected_line=$(sudo rkt list | grep running | grep "${container_name}" -m 1)
+
+        if [ "$selected_line" ]; then 
+            selected_container_id=$(echo "$selected_line" | awk -v N=1 '{print $N}')
+        else 
+            echo -e "\n\tError! Invalid container name.\n"
+            exit 0
+        fi
+    fi
+
+    if [ "$selected_container_id" ]; then 
+        sudo rkt enter "$selected_container_id" "$bash_profile"
+    fi 
+}
+
+rkt-run(){
+    image_id=''
+    image_name=''
+    image_size=''
+    image_import_time=''
+    image_last_used=''
+    image_number=''
+    selected_line=''
+    bypass_yes=''
+    continue_run='y'
+    skip_journal=''
+    yes_journalq=''
+    view_journal='y'
+    port=''
+    mount_map=''
+    how_many=1
+
+    while test $# -gt 0; do 
+        case "$1" in
+            -h|--help|help)
+                echo -e "\nhkt run options:\n"
+                echo -e "\t-h|--help"
+                echo -e "\t-id|--image-id\t\t\tImage ID"
+                echo -e "\t-number|--image-number\t\tImage Number"
+                echo -e "\t-name|--image-name\t\tImage Name"
+                echo -e "\t--mount-map\t\t\tSpecify the mount directoy from Host OS"
+                echo -e "\t-p|--port\t\t\tPort NAME:HOSTPORT. Sample: 80-tcp:80"
+                echo -e "\t-y|--yes|--sure\t\t\tBypass question"
+                echo -e "\t-hm|--how-many\t\t\tHow many instance"
+                echo -e "\t--skip-journal\t\t\tSkip journalctl question"
+                echo -e ""
+                exit 0
+                ;;
+            -id|--image-id)
+                shift
+                
+                image_id="$1"
+
+                shift
+                ;;
+            -number|--image-number)
+                shift
+                
+                image_number="$1"
+
+                shift
+                ;;
+            -name|--image-name)
+                shift
+                
+                image_name="$1"
+
+                shift
+                ;;
+            -y|--yes|--sure)
+                bypass_yes="--yes"
+
+                shift
+                ;;
+            --skip-journalq|--skip-journal)
+                skip_journal="--skip-journalq"
+
+                shift
+                ;;
+            --yes-journalq)
+                yes_journalq="--yes-journalq"
+
+                shift
+                ;;
+            -p|--port)
+                shift 
+                
+                port="$1"
+
+                shift
+                ;;
+            --mount-map)
+                shift 
+                
+                mount_map="$1"
+
+                shift
+                ;;
+            -hm|--how-many)
+                shift 
+
+                how_many=$1
+
+                shift 
+                ;;
+            *)
+                echo -e "\n\t Unknown command: $1\n"
+                exit 0
+                ;;
+        esac 
+    done 
+
+    # IF IMAGE NAME IS PROVIDED
+    if [ "$image_name" ]; then 
+        # GET THE FIRST RESULT
+        selected_line=$(sudo rkt image list | grep "$image_name" -m 1)
+
+        # VALIDATE SELECTED LINE
+        if [ -z "$selected_line" ]; then 
+            echo -e ""
+            echo -e "\tError! Image Name ${image_name} not found." | grep "${image_name}" --color
+            echo -e ""
+            exit 0
+        fi
+    # IF IMAGE ID IS PROVIDED
+    elif [ "$image_id" ]; then 
+        # GET THE FIRST RESULT
+        selected_line=$(sudo rkt image list | grep "$image_id" -m 1)
+
+        # VALIDATE SELECTED LINE
+        if [ -z "$selected_line" ]; then 
+            echo -e ""
+            echo -e "\tError! Image ID ${image_id} not found." | grep "${image_id}" --color
+            echo -e ""
+            exit 0
+        fi
+    # IF IMAGE NUMBER IS PROVIDED
+    elif [ "$image_number" ]; then 
+        # VALIDATE IMAGE NUMBER 
+        
+        if (( $image_number > 0)); then 
+            # GET SELECTED LINE NUMBER
+            selected_line=$(sudo rkt image list | sed -n '1!p' | sed "${image_number}q;d")
+
+            # VALIDATE SELECTED LINE
+            if [ -z "$selected_line" ]; then 
+                echo -e ""
+                echo -e "\tError! Image Number ${image_number} not found." | grep "${image_number}" --color
+                echo -e ""
+                exit 0
+            fi
+        else 
+            echo -e "\n\tError! Invalid number.\n"
+            exit 0
+        fi
+    # ALLOW USER TO SELECT IMAGE NUMBER
+    else 
+        # SHOW IMAGES SELECTION
+        hkt image list
+
+        read -p "Please select image number to run: " image_number
+
+        # CALL SELF AGAIN
+            # IF PORT IS PRESET
+            if [ "$port" ]; then 
+                port="--port $port"
+            fi
+            # IF MOUNT MAP IS PRESENT
+            if [ "$mount_map" ]; then 
+                mount_map="--mount-map $mount_map"
+            fi
+            # IF HOW MANY IS PROVIDED
+            if [ "$how_many" ]; then 
+                how_many="--how-many $how_many"
+            fi
+        hkt run --image-number "$image_number" $bypass_yes $skip_journal $yes_journalq $port $mount_map $how_many
+        exit 0
+    fi 
+
+    # AT THIS POINT WE SHOULD HAVE A SELECTED LINE WITH VALUE
+    if [ "$selected_line" ]; then 
+        # DISPLAY INFO OF THE SELECTED LINE
+        image_id=$(echo "$selected_line" | awk -v N=1 '{print $N}')
+        image_name=$(echo "$selected_line" | awk -v N=2 '{print $N}')
+        image_size=$(echo "$selected_line" | awk -v N=3 '{print $N}')
+        image_import_time_a=$(echo "$selected_line" | awk -v N=4 '{print $N}')
+        image_import_time_b=$(echo "$selected_line" | awk -v N=5 '{print $N}')
+        image_import_time_c=$(echo "$selected_line" | awk -v N=6 '{print $N}')
+        image_import_time="$image_import_time_a $image_import_time_b $image_import_time_c"
+        image_last_used_a=$(echo "$selected_line" | awk -v N=7 '{print $N}')
+        image_last_used_b=$(echo "$selected_line" | awk -v N=8 '{print $N}')
+        image_last_used_c=$(echo "$selected_line" | awk -v N=9 '{print $N}')
+        image_last_used="$image_last_used_a $image_last_used_b $image_last_used_c"
+
+        # echo -e ""
+        # echo -e "${KFBOLD}Selected Line${KFDEF}: $selected_line"
+        echo -e ""
+        echo -e "${KFBOLD}Image ID${KFDEF}:\t$image_id"
+        echo -e "${KFBOLD}Image Name${KFDEF}:\t$image_name"
+        echo -e "${KFBOLD}Image Size${KFDEF}:\t$image_size"
+        echo -e "${KFBOLD}Import Time${KFDEF}:\t$image_import_time"
+        echo -e "${KFBOLD}Last Used${KFDEF}:\t$image_last_used"
+
+        # ASK USE IF SURE
+        if [ -z "$bypass_yes" ]; then
+            echo -e ""
+            read -p "Are you sure about that? y/n: " continue_run
+        fi
+        
+        # IF USER IS NOT SURE
+        if [ "$continue_run" != "y" ]; then 
+            echo -e "\n\tTransaction cancelled. Please come again. 👋\n"
+            exit 0
+        fi
+    
+    else
+        # THIS SHOULD NOT BE NEEDED 
+        echo -e "\n\tError! Invalid number.\n"
+        exit 0 
+    fi
+
+    # AT THIS POINT WE SHOULD HAVE A IMAGE ID
+    if [ "$image_id" ]; then
+        # NETWORKING
+        # networking="--net=host --dns=host --hosts-entry=host" 
+        
+        networking="--net=host" 
+        # networking="--net=containernet:IP=10.1.25.2 --net=default"
+        
+        # IF PORT IS PRESENT
+        if [ "$port" ]; then 
+            # # CHECK IF PORT 80
+            # is_port_80=$(echo "$port" | grep ":80$")
+            
+            # # IF :80 IS DETECTED
+            # if [ "$is_port_80" ]; then 
+            #     networking="$networking --port=$port"
+            # else 
+            #     networking="--port=$port"
+            # fi 
+
+            networking="--port=$port"
+        fi
+
+        # IF MOUNTMAP IS PROVIDED
+        volumes=''
+        if [ "$mount_map" ]; then
+            # GET JSON OF MOUNT MAP FILE
+            volume_points=$(cat "$mount_map" | jq '.app.volumePoints')
+            
+            # IF VOLUME POINTS ARE PROVIDED
+            if [ "$volume_points" != "null" ]; then
+                # START LOOPING TO VOLUME POINTS
+                jq_loop_volume_item=0
+                while true; do
+                    # GET VOLUME ITEM
+                    volume_item=$(echo $volume_points | jq ".[$jq_loop_volume_item]")
+                    
+                    # IF HAS VOLUME ITEM
+                    if [ "$volume_item" != "null" ]; then 
+                        volume_item_name=$(echo -e "$volume_item" | jq -r ".name")
+                        volume_item_path=$(echo -e "$volume_item" | jq -r ".path")
+
+                        # CHECK IF VOLUME DIRECTORY EXIST
+                        if [ -d "$volume_item_path" ]; then 
+                            # echo -e "volume_item_name: $volume_item_name"
+                            # echo -e "volume_item_path: $volume_item_path"
+                            # echo ""
+
+                            volumes="${volumes} --volume ${volume_item_name},kind=host,source=${volume_item_path}"
+                            # echo -e "$volumes\n"
+                        fi
+                    else    
+                        break
+                    fi
+                    
+                    # INCREMENT VOLUME LOOP
+                    jq_loop_volume_item=$((jq_loop_volume_item+1))
+                done
+            fi
+        fi
+        
+        if [ "$how_many" ]; then 
+            while (( how_many > 0)); do 
+                # RUN THE IMAGE ID
+                run_output=$(sudo systemd-run --slice=machine \
+                rkt run \
+                $networking \
+                 --dns=host --hosts-entry=host \
+                --insecure-options=all \
+                $volumes \
+                $image_id  2>&1 | tail -1)
+
+                how_many=$((how_many-1))
+            done
+        fi
+
+        run_service_unit=$(echo "$run_output" | awk -v N=4 '{print $N}')
+
+        # ASK USER IF WANT TO VIEW JOURNALCTL
+        if [ -z "$skip_journal" ]; then 
+
+            # # ASK USER TO VIEW JOURNAL
+            # if [ -z "$yes_journalq" ]; then 
+            #     echo -e ""
+            #     read -p "Do you want to view journalctl? y/n: " view_journal
+            # else 
+            #     sleep 0.25
+            # fi 
+
+            if [ "$view_journal" == "y" ]; then 
+                echo -e ""
+                sleep 0.5
+                sudo journalctl -u "$run_service_unit"
+            fi
+        else 
+            sleep .5
+        fi
+
+        # LIST RUNNING CONTAINERS
+        hkt list running
+
+        echo -e "$run_output" | grep "$run_service_unit" --color
+        echo -e ""
+
+        echo -e "\tThank you! 🙏\n"
+    fi
+}
+
+change-manifest-version(){
+    # MANIFEST FILE
+    # manifest='/home/mark/exports/test-nginx.manifest'
+    manifest=$1
+
+    # CLEAN MANIFEST
+    clean_manifest=$(cat $manifest | jq -c .)
+
+    # GET LABELS OBJECT
+    labels=$(echo $clean_manifest | jq -c '.labels')
+
+    # # STORE LABELS 
+    # echo "$labels" > manipis
+
+    # GET VERSION PROPERTY
+    version=$(cat $manifest | grep version -A 1 | tail -n +2)
+    
+    # ACCESS VERSION VALUE
+    version_value=$(echo '{'${version}'}' | jq -r '.value')
+
+    # CURRENT DATE
+    current_date=$(date '+%Y-%m-%d-%H-%M')
+
+    # NEW LABELS
+    new_labels="${labels/$version_value/$current_date}"
+
+    # echo ""
+    # echo -e "manifest:\t $manifest"
+    # echo -e "clean_manifest:\t $clean_manifest"
+    # echo -e "labels:\t $labels"
+    # echo -e "version:\t $version"
+    # echo -e "version_value:\t $version_value"
+    # echo -e "current_date:\t $current_date"
+    # echo -e "labels:\t\t $labels" | grep $version_value --color
+    # echo -e "new_labels:\t $new_labels" | grep $current_date --color
+    # echo ""
+    
+    # REPLACE THE WHOLE LABELS
+    new_manifest=${clean_manifest/"$labels"/$new_labels}
+    # new_manifest="${clean_manifest/$labels/$labels}"
+    
+    # SAVE CHANGES
+    # echo -e "$new_manifest" | jq . > $manifest
+    echo "$new_manifest" | jq . > $manifest
+
+    # exit
+}
+
+forget-mountpoints(){
+    # MANIFEST FILE
+    # manifest='/home/mark/exports/test-nginx.manifest'
+    manifest=$1
+
+    # CLEAN MANIFEST
+    clean_manifest=$(cat $manifest | jq -c .)
+
+    # GET MOUNTPOINTS OBJECT
+    mountpoints=$(echo $clean_manifest | jq -c '.app.mountPoints')
+
+    # IF HAS MOUNT POINTS
+    if [ "$mountpoints" != 'null' ]; then 
+        new_manifest=${clean_manifest/",\"mountPoints\":$mountpoints"/""}
+
+        # echo ''
+        # echo -e "mountpoints:\t $mountpoints"
+        # echo -e "new_manifest:\t $new_manifest"
+        # echo ''
+
+        echo -e "$new_manifest" | jq . > $manifest 
+
+        # echo -e "\n\tmanifest\t $manifest"
+    fi
+}
+
+repackage-container(){
+    # VARS
+    exited_container_number=0
+    exited_container_id=0
+    container_name='' # THIS IS THE DEFAULT PARAM
+    image_name=''
+    selected_line=''
+    bypass_yes=false
+    force_mkdir=false
+    manifest_file=''
+    makafal_file=''
+    preserve=false
+    auto_version=''
+    forget_mountpoints=''
+
+    # FUNCTIONS
+    rkt-list-2(){
+        output=''
+
+        # GET LIST
+        output=$(sudo rkt list | sed -n '1!p' | grep --color=always exited | grep -v "garbage")
+
+        if [ "$output" ]; then 
+            # ADD LINE NUMBERS
+            output=$(echo "$output" | grep --color=always '' -n)
+            # OUTPUT WITH HEADERS
+            echo -e "\n${KFBOLD}$(sudo rkt list | head -n 1)${KFDEF}\n${output}\n" 
+        else
+            echo -e "\n\tNo exited containers.\n"
+            exit 0
+        fi
+    }
+
+    # CAPTURE COMMANDS
+    while test $# -gt 0; do
+        case "$1" in 
+            -y|--yes|--sure)
+                bypass_yes=true
+
+                shift
+                ;;
+            -f|--force)
+                force_mkdir=true
+
+                shift
+                ;;
+            -mnf|--manifest)
+                shift 
+
+                manifest_file="$1"
+
+                shift
+                ;;
+            -mkf|--makafal|-mm|--mount-map)
+                shift 
+
+                makafal_file="$1"
+
+                shift
+                ;;
+            --preserve)
+                preserve=true
+
+                shift
+                ;;
+            --auto-version)
+                auto_version=true 
+
+                shift
+                ;;
+            --forget-mountpoints)
+                forget_mountpoints=true
+
+                shift
+                ;;
+            --debugX)
+
+                exit 0
+                ;;
+            -h|--help)
+                echo -e "\nI don't wanna help.\n"
+                echo -e "\trkt repack [AppName]"
+                echo ""
+                echo -e "Available options:"
+                echo ""
+                echo -e "\t[AppName]\t\tOptional. Name of the exited app."
+                echo -e "\t-y|--yes|--sure\t\tTo bypass question"
+                echo -e "\t-f|--force\t\tForce overwritting existing folder"
+                echo -e "\t-mnf|--manifest\t\tUse custom manifest file"
+                echo -e "\t-mkf|--makafal\t\tUse to copy directories of mounted volumes"
+                echo -e "\t-mm|--mount-map\t\tAlias of --makafal"
+                echo -e "\t--preserve\t\tPreserve extracted rootfs and manifest"
+                echo -e "\t--auto-version\t\tAuto populate the version on image"
+                echo ""
+                exit 0
+                ;;
+            *)
+                container_name=$1
+                shift
+                ;;
+        esac
+    done
+
+    # exit 0
+
+    # echo -e "container_name: $container_name"
+    # echo -e "bypass_yes: $bypass_yes"
+    # echo -e "force_mkdir: $force_mkdir"
+
+    # IF CONTAINER NAME IS PROVIDED
+    if [ "$container_name" ]; then 
+        selected_line=$(sudo rkt list | sed -n '1!p' | grep exited | grep -v "garbage" | grep "${container_name}" -m 1)
+
+    else 
+        # SHOW EXITED
+        rkt-list-2
+
+        read -p "Please select container number to repackage: " exited_container_number
+
+        # CHECK FOR exited_container_number 
+        if (( $exited_container_number > 0)); then 
+            exited_container_id=$(sudo rkt list | sed -n '1!p' | grep exited | grep -v "garbage" | sed "${exited_container_number}q;d" | awk -v N=1 '{print $N}')
+
+            # IF HAS ID
+            if [ $exited_container_id ]; then 
+                selected_line=$(sudo rkt list | sed -n '1!p' | grep exited | grep -v "garbage" | sed "${exited_container_number}q;d")
+
+                # echo -e "\n\tselected_line\t${selected_line}\n"
+            else 
+                echo -e "\n\tError! Invalid number.\n"
+                exit 0
+            fi
+        fi
+    fi
+
+    # IF HAS SELECTED LINE
+    if [ "$selected_line" ]; then
+        continue_repackaging=''
+
+    # GET CONTAINER NAME
+        exited_container_id=$(echo "$selected_line" | awk -v N=1 '{print $N}')
+        container_name=$(echo "$selected_line" | awk -v N=2 '{print $N}')
+        image_name=$(echo "$selected_line" | awk -v N=3 '{print $N}')
+        created_a=$(echo "$selected_line" | awk -v N=5 '{print $N}')
+        created_b=$(echo "$selected_line" | awk -v N=6 '{print $N}')
+        created_c=$(echo "$selected_line" | awk -v N=7 '{print $N}')
+        created="$created_a $created_b $created_c"
+        started_a=$(echo "$selected_line" | awk -v N=8 '{print $N}')
+        started_b=$(echo "$selected_line" | awk -v N=9 '{print $N}')
+        started_c=$(echo "$selected_line" | awk -v N=10 '{print $N}')
+        started="$started_a $started_b $started_c"
+
+        echo ""
+        echo -e "${KFBOLD}UUID${KFDEF}: \t\t$exited_container_id"
+        echo -e "${KFBOLD}App Name${KFDEF}: \t$container_name"
+        echo -e "${KFBOLD}Image Name${KFDEF}: \t$image_name"
+        echo -e "${KFBOLD}Created${KFDEF}: \t$created"
+        echo -e "${KFBOLD}Started${KFDEF}: \t$started"
+        # echo -e "${KFBOLD}Selected Line${KFDEF}: \t$selected_line"
+
+        if [ "$bypass_yes" == "true" ]; then 
+            continue_repackaging="y"
+        else 
+            echo ""
+            read -p "Are you sure about that? y/n: " continue_repackaging
+        fi 
+        
+
+        if [ "$continue_repackaging" == "y" ]; then 
+            exports_folder="${HOME}/exports"
+
+            if [ "$force_mkdir" == "true" ]; then 
+                sudo rm -rf "${exports_folder}/${container_name}"
+            fi
+
+            if [ -d "${exports_folder}/${container_name}" ]; then 
+                echo ""
+                echo -e "\tDirectory ${exports_folder}/${container_name}/ already exist." 
+                echo -e "\tYou can use --force flag to force the force. May the force be with you."
+                echo ""
+                echo -e "\tTransaction cancelled. Please come again. 👋"
+                echo ""
+            else 
+                # CREATE FOLDER
+                mkdir "${exports_folder}/${container_name}"
+                echo ""
+                echo -e "\tExporting... Please wait or take a coffee. ☕️"
+
+                # START EXPORT CONTAINER TO IMAGE
+                sudo rkt export $exited_container_id "${exports_folder}/${container_name}/${container_name}.aci"
+
+                # IF MANIFEST OR MAKAFAL ARE PROVIDED THEN DECOMPRESS IMAGE
+                decompress_image=''
+                if [ "$manifest_file" ] || [ "$makafal_file" ]; then 
+                    decompress_image=true
+                fi
+                if [ "$auto_version" ] || [ "$forget_mountpoints" ]; then 
+                    decompress_image=true
+                fi
+
+                # DECOMPRESS THE IMAGE
+                if [ "$decompress_image" ]; then 
+                    echo ""
+
+                    # DECOMPRESS THE IMAGE
+                    # mkdir "./${container_name}"
+                    sudo tar -xvf "${exports_folder}/${container_name}/${container_name}.aci" -C "${exports_folder}/${container_name}"
+                fi
+                
+                # MANIFEST SUBSTITUTION
+                if [ "$manifest_file" ]; then
+                    # GET CURRENT OWNER 
+                    current_owner=$(stat -c '%U' "${exports_folder}/${container_name}/manifest")
+                    
+                    # TEMPORARY CHANGE CURRENT OWNER
+                    sudo chown $(whoami) "${exports_folder}/${container_name}/manifest"
+
+                    # REPLACE THE MANIFEST FILE
+                    echo "$(cat "$manifest_file" | jq '.')" > "${exports_folder}/${container_name}/manifest"
+                    
+                    # REVERT OWNER OF MANIFEST
+                    sudo chown "$current_owner" "${exports_folder}/${container_name}/manifest"
+                else 
+                    echo ""
+                fi
+                
+                # MAKAFAL FILE IS TO AUTO TRANSFER MOUNTED VOLUMES
+                if [ "$makafal_file" ]; then
+                    # GET JSON OF MAKAFAL FILE
+                    volume_points=$(cat "$makafal_file" | jq '.app.volumePoints')
+
+                    # IF VOLUME POINTS ARE PROVIDED
+                    if [ "$volume_points" != "null" ]; then
+                        # START LOOPING TO VOLUME POINTS
+                        jq_loop_volume_item=0
+                        while true; do
+                            # GET VOLUME ITEM
+                            volume_item=$(echo $volume_points | jq ".[$jq_loop_volume_item]")
+                            
+                            # IF HAS VOLUME ITEM
+                            if [ "$volume_item" != "null" ]; then 
+                                volume_item_name=$(echo -e "$volume_item" | jq -r ".name")
+                                volume_item_path=$(echo -e "$volume_item" | jq -r ".path")
+
+                                # CHECK IF VOLUME DIRECTORY EXIST
+                                if [ -d "$volume_item_path" ]; then 
+                                    # echo -e "volume_item_name: $volume_item_name"
+                                    # echo -e "volume_item_path: $volume_item_path"
+                                    # echo ""
+
+                                    # CHECK MOUNTPOINTS IN MANIFEST
+                                    mount_points=$(cat "${exports_folder}/${container_name}/manifest" | jq ".app.mountPoints")
+
+                                    # IF HAS MOUNTPOINTS IN MANIFEST
+                                    if [ "$mount_points" != "null" ]; then 
+                                        jq_loop_mount_item=0
+                                        while true; do 
+                                            # GET MOUNT ITEM
+                                            mount_item=$(echo $mount_points | jq ".[$jq_loop_mount_item]")
+
+                                            # IF HAS MOUNT ITEM
+                                            if [ "$mount_item" != "null" ]; then 
+                                                mount_item_name=$(echo -e "$mount_item" | jq -r ".name")
+                                                mount_item_path=$(echo -e "$mount_item" | jq -r ".path")
+
+                                                # CHECK CORRESPONDING MOUNT 
+                                                if [ "$volume_item_name" == "$mount_item_name" ]; then 
+                                                    # CHECK IF MOUNT DIRECTORY EXIST
+                                                    if [ -d "${exports_folder}/${container_name}/rootfs${mount_item_path}" ]; then 
+                                                        # echo -e "\tmount_item_name: $mount_item_name"
+                                                        # echo -e "\tmount_item_path: $mount_item_path"
+                                                        # echo ""
+                                                        
+                                                        # REMOVE EXISTING CONTENTS OF MOUNT
+                                                        sudo rm -rf "${exports_folder}/${container_name}/rootfs${mount_item_path}/"
+
+                                                        # RECREATE THE MOUNT
+                                                        sudo mkdir "${exports_folder}/${container_name}/rootfs${mount_item_path}/"
+
+                                                        # COPY FILES FROM VOLUME TO MOUNT
+                                                        sudo rsync -a "$volume_item_path/" "${exports_folder}/${container_name}/rootfs${mount_item_path}"
+
+                                                        # ls "./${container_name}/rootfs${mount_item_path}"
+                                                        # echo ""
+                                                    fi 
+                                                fi
+                                            else    
+                                                break
+                                            fi
+
+                                            # INCREMENT MOUNT LOOP
+                                            jq_loop_mount_item=$((jq_loop_mount_item+1))
+                                        done
+                                    fi
+                                fi
+                            else    
+                                break
+                            fi
+                            
+                            # INCREMENT VOLUME LOOP
+                            jq_loop_volume_item=$((jq_loop_volume_item+1))
+                        done
+                    fi
+                fi
+                
+                # AT THIS POINT WE CHECK IF $auto_version OR $forget_mountpoints 
+                # ARE GIVEN
+                # IF YES, THEN CHECK IF THE IMAGE HAS BEEN DECOMPRESSED
+                # IF NOT THEN DECOMPRESS THE IMAGE
+
+                # FOR AUTO VERSIONING, IMAGE MUST BE DECOMPRESS FIRST
+                # AT THIS POINT WE ASSUME THAT THE IMAGE IS ALREADY DECOMPRESSED
+                # IMAGE AUTO VERSIONING
+
+                
+                if [ "$auto_version" ]; then 
+                    # GET CURRENT OWNER 
+                    current_owner=$(stat -c '%U' "${exports_folder}/${container_name}/manifest")
+                    
+                    # TEMPORARY CHANGE CURRENT OWNER
+                    sudo chown $(whoami) "${exports_folder}/${container_name}/manifest"
+
+                    # REPLACE THE MANIFEST VERSION
+                    change-manifest-version "${exports_folder}/${container_name}/manifest"
+
+                    # REVERT OWNER OF MANIFEST
+                    sudo chown "$current_owner" "${exports_folder}/${container_name}/manifest"
+                fi 
+                
+                # FORGETTING MOUNT POINTS
+                if [ "$forget_mountpoints" ]; then 
+                    # GET CURRENT OWNER 
+                    current_owner=$(stat -c '%U' "${exports_folder}/${container_name}/manifest")
+                    
+                    # TEMPORARY CHANGE CURRENT OWNER
+                    sudo chown $(whoami) "${exports_folder}/${container_name}/manifest"
+
+                    # FORGET THE MOUNT POINTS
+                    forget-mountpoints "${exports_folder}/${container_name}/manifest"
+
+                    # REVERT OWNER OF MANIFEST
+                    sudo chown "$current_owner" "${exports_folder}/${container_name}/manifest"
+                fi
+
+                # COMPRESSION
+                if [ "$manifest_file" ] || [ "$makafal_file" ]; then
+                    # DELETE THE ACI
+                    sudo rm "${exports_folder}/${container_name}/${container_name}.aci" 
+                    
+                    # SAVE CURRENT DIR
+                    current_dir=$(pwd)
+                    
+                    # ENTER THE CONTAINERS DIR
+                    cd "${exports_folder}/${container_name}" 
+
+                    # CREATE ACI
+                    sudo tar -cvf "./${container_name}.aci" rootfs manifest
+
+                    # GO BACK TO ORIGINAL DIR
+                    cd "$current_dir"
+                fi
+
+                # DELETE ROOTFS AND MANIFEST HERE
+                if [ "$manifest_file" ] || [ "$makafal_file" ]; then 
+                    if [ "$preserve" == "false" ]; then 
+                        sudo rm -rf "${exports_folder}/${container_name}/rootfs" "${exports_folder}/${container_name}/manifest"
+                    fi
+                fi
+
+                # REGISTER NEW IMAGE
+                sudo rkt --insecure-options=image fetch "${exports_folder}/${container_name}/${container_name}.aci"
+
+                hkt image list
+
+                echo -e "\tDone! 🎉  New image created and registered ${exports_folder}/${container_name}/"
+                echo ""
+                
+                # ls "${container_name}/"
+            fi 
+        else 
+            echo ""
+            echo -e "\tTransaction cancelled. Please come again. 👋"
+            echo ""
+        fi
+    else 
+        echo -e "\n\tError! Invalid number.\n"
+        exit 0
+    fi
+}
+
+
+
+# IF NO SPECIFIED COMMANDS
+if [ -z "$1" ]; then 
+    # CALL HELP
+    hkt --help 
+else
+    # CAPTURE COMMANDS
+    while test $# -gt 0; do
+        case "$1" in 
+            list)
+                shift
+
+                rkt-list "$@"
+
+                break
+                ;;
+            image)
+                shift 
+
+                rkt-image "$@"
+
+                break
+                ;;
+            stop)
+                shift
+                rkt-stop "$@"
+
+                break
+                ;;
+            gc)
+                shift 
+                rkt-gc "$@"
+
+                break
+                ;;
+            repack)
+                shift
+                repackage-container "$@"
+                
+                break
+                ;;
+            enter)
+                shift 
+
+                rkt-enter "$@"
+
+                break
+                ;;
+            run)
+                shift 
+
+                rkt-run "$@"
+
+                break
+                ;;
+            journal)
+                shift
+                
+                sudo journalctl -u "$@"
+
+                break
+                ;;
+            help) 
+                shift
+
+                hkt "$1" --help
+
+                break
+                ;;
+            -h|--help)
+                echo -e "\nhkt: missing command\n"
+                echo -e "NAME:"
+                    echo -e "\thkt - hkt, beautified rkt\n"
+                echo -e "USAGE:"
+                    echo -e "\thkt [command]\n"
+                echo -e "VERSION:"
+                    echo -e "\t1.0.0\n"
+                echo -e "COMMANDS:"
+                    echo -e "\tlist\t\t\tEquivalent of: sudo rkt list"
+                    echo -e "\timage\t\t\tEquivalent of: sudo rkt image"
+                    echo -e "\tstop\t\t\tPending"
+                echo -e "\nDESCRIPTION:"
+                    echo -e "\tA beutified cli for rkt.\n"
+                    echo -e "\tTo get the help on any specific command, run \"hkt help command\"."
+                echo -e "\nOPTIONS:"
+                    echo -e "\t-h, --help\t\thelp for hkt"
+                echo -e "\nAUTHOR:"
+                    echo -e "\tMark Panado"
+                    echo -e "\thello@mark.ph\n"
+                exit 0
+                ;;
+            *)
+                echo -e "\n\t Unknown command: $1\n"
+                exit 0
+                ;;
+        esac
+    done
+fi
